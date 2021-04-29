@@ -30,6 +30,9 @@ import torch
 import torch.utils.data
 import torchvision
 from tqdm import tqdm as tqdm
+import socket
+from datetime import datetime
+from os.path import join
 
 torch.set_num_threads(3)
 
@@ -38,20 +41,21 @@ def parse_opt():
   """Parses the input arguments."""
   parser = argparse.ArgumentParser()
   parser.add_argument('-f', type=str, default='')
-  parser.add_argument('--comment', type=str, default='test_notebook')
-  parser.add_argument('--dataset', type=str, default='css3d')
+  parser.add_argument('--comment', type=str, default='fashion200k')
+  parser.add_argument('--dataset', type=str, default='fashion200k')
   parser.add_argument(
-      '--dataset_path', type=str, default='../imgcomsearch/CSSDataset/output')
+      '--dataset_path', type=str, default='D:/DataSet/fashion-200k')
   parser.add_argument('--model', type=str, default='tirg')
   parser.add_argument('--embed_dim', type=int, default=512)
   parser.add_argument('--learning_rate', type=float, default=1e-2)
   parser.add_argument(
-      '--learning_rate_decay_frequency', type=int, default=9999999)
+      '--learning_rate_decay_frequency', type=int, default=50000)
   parser.add_argument('--batch_size', type=int, default=32)
   parser.add_argument('--weight_decay', type=float, default=1e-6)
-  parser.add_argument('--num_iters', type=int, default=210000)
+  parser.add_argument('--num_iters', type=int, default=160000)
   parser.add_argument('--loss', type=str, default='soft_triplet')
-  parser.add_argument('--loader_num_workers', type=int, default=4)
+  parser.add_argument('--loader_num_workers', type=int, default=0)
+  parser.add_argument('--log_dir', type=str, default='d:/GitHub/tirg/logs/fashion200k')
   args = parser.parse_args()
   return args
 
@@ -127,7 +131,7 @@ def load_dataset(opt):
   return trainset, testset
 
 
-def create_model_and_optimizer(opt, texts):
+def create_model_and_optimizer(opt, texts, it=0):
   """Builds the model and related optimizer."""
   print('Creating model and optimizer for', opt.model)
   if opt.model == 'imgonly':
@@ -169,16 +173,18 @@ def create_model_and_optimizer(opt, texts):
           for j, p22 in enumerate(p2['params']):
             if p11 is p22:
               p2['params'][j] = torch.tensor(0.0, requires_grad=True)
+
+  scale = 0.1 ** (it / opt.learning_rate_decay_frequency)
   optimizer = torch.optim.SGD(
-      params, lr=opt.learning_rate, momentum=0.9, weight_decay=opt.weight_decay)
+      params, lr=opt.learning_rate*scale, momentum=0.9, weight_decay=opt.weight_decay)
   return model, optimizer
 
 
-def train_loop(opt, logger, trainset, testset, model, optimizer):
+def train_loop(opt, logger, trainset, testset, model, optimizer, it=0):
   """Function for train loop"""
   print('Begin training')
   losses_tracking = {}
-  it = 0
+  # it = 0
   epoch = -1
   tic = time.time()
   while it < opt.num_iters:
@@ -276,21 +282,26 @@ def train_loop(opt, logger, trainset, testset, model, optimizer):
 
 
 def main():
-  opt = parse_opt()
-  print('Arguments:')
-  for k in opt.__dict__.keys():
-    print('    ', k, ':', str(opt.__dict__[k]))
+    opt = parse_opt()
+    print('Arguments:')
+    for k in opt.__dict__.keys():
+        print('    ', k, ':', str(opt.__dict__[k]))
 
-  logger = SummaryWriter(comment=opt.comment)
-  print('Log files saved to', logger.file_writer.get_logdir())
-  for k in opt.__dict__.keys():
-    logger.add_text(k, str(opt.__dict__[k]))
+    current_time = datetime.now().strftime('%b%d_%H-%M-%S')
+    logdir = join(opt.log_dir, current_time + '_' + socket.gethostname() + opt.comment)
+    logger = SummaryWriter(logdir)
+    print('Log files saved to', logger.file_writer.get_logdir())
+    for k in opt.__dict__.keys():
+        logger.add_text(k, str(opt.__dict__[k]))
 
-  trainset, testset = load_dataset(opt)
-  model, optimizer = create_model_and_optimizer(opt, trainset.get_all_texts())
+    trainset, testset = load_dataset(opt)
+    checkpoint = torch.load(r'D:\GitHub\tirg\logs\fashion200k\Apr26_12-59-58_DESKTOP-KIVBR0Ifashion200k\latest_checkpoint.pth')
+    it = checkpoint['it']
+    model, optimizer = create_model_and_optimizer(opt, trainset.get_all_texts(), it)
+    model.load_state_dict(checkpoint['model_state_dict'])
 
-  train_loop(opt, logger, trainset, testset, model, optimizer)
-  logger.close()
+    train_loop(opt, logger, trainset, testset, model, optimizer, it)
+    logger.close()
 
 
 if __name__ == '__main__':
